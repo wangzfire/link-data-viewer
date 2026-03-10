@@ -3,3 +3,7 @@ __pycache__/
 *.pyo
 .env
 INSTALL.md
+python/
+_setup_python.ps1
+_download_winget.ps1
+_install_winget.ps1

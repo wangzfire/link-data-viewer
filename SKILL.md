@@ -10,161 +10,136 @@ disable-model-invocation: false
 
 **核心原则：只读操作，绝不修改数据。**
 
+**技术架构：纯 Python 实现，通过 pymysql 直接连接数据库，无需 mysql CLI 客户端，跨平台兼容（Windows/Linux/Mac）。**
+
 ---
 
 ## 阶段 0：环境预检
 
-在执行任何数据库操作之前，必须先完成环境检测。此阶段确保 mysql 客户端和 Excel 导出所需的依赖可用。
+在执行任何数据库操作之前，必须先完成环境检测。本技能仅依赖 Python，无需安装 mysql 客户端。
 
-### 0.0 环境识别
-
-首先判断当前运行环境：
-
-```bash
-# 检测是否为 WSL2 环境
-grep -qi microsoft /proc/version 2>/dev/null
-```
-
-- 返回 0 → **WSL2 环境**（后续可使用 `.exe` 后缀调用 Windows 侧工具，路径可通过 `wslpath -w` 转换）
-- 返回非 0 → 进一步判断：
-  ```bash
-  uname -s 2>/dev/null
-  ```
-  - 输出含 `MINGW` 或 `MSYS` → **Git Bash 环境**（Windows 上的 bash，可直接调用 Windows 可执行文件）
-  - 输出为 `Linux` → **原生 Linux 环境**
-
-**本技能要求 Windows 用户使用 Git Bash 运行。** 如果检测到非 bash 环境（如 CMD、PowerShell），提示用户：
-> 本技能需要在 Git Bash 环境下运行。请安装 Git for Windows（https://git-scm.com/download/win）后在 Git Bash 中使用 Claude Code。
-
-将环境类型记录下来，后续安装和调用命令时据此选择正确的方式。
-
-### 0.1 检测 winget
-
-winget 是本技能在 Windows 上安装依赖的**唯一包管理器**，必须先确保可用：
-
-```bash
-winget --version 2>/dev/null || winget.exe --version 2>/dev/null
-```
-
-将检测到的可执行文件记为 `$WINGET`。
-
-如果 winget 不可用，使用 AskUserQuestion 询问用户是否同意自动安装 winget：
-
-- 用户同意 → 根据环境分步执行安装（**注意：下载和安装分开执行，每步设置足够的超时时间**）：
-
-  **WSL2 环境**：
-  ```bash
-  # 步骤 1：下载（设置 Bash 超时 300 秒）
-  curl -L "https://aka.ms/getwinget" -o /tmp/winget.msixbundle
-  ```
-  下载完成后确认文件存在，再执行安装：
-  ```bash
-  # 步骤 2：安装（设置 Bash 超时 120 秒）
-  powershell.exe -Command "Add-AppxPackage -Path '$(wslpath -w /tmp/winget.msixbundle)'" 2>&1
-  rm -f /tmp/winget.msixbundle
-  ```
-
-  **Git Bash 环境**：
-  ```bash
-  # 步骤 1：下载（设置 Bash 超时 300 秒）
-  # 使用 PowerShell 下载，通过临时脚本避免转义问题
-  ```
-  先用 Write 工具创建临时脚本 `_download_winget.ps1`：
-  ```powershell
-  $ProgressPreference = 'SilentlyContinue'
-  Invoke-WebRequest -Uri 'https://aka.ms/getwinget' -OutFile "$env:TEMP\winget.msixbundle"
-  Write-Host "下载完成: $env:TEMP\winget.msixbundle"
-  ```
-  执行下载：
-  ```bash
-  powershell -ExecutionPolicy Bypass -File "_download_winget.ps1"
-  rm -f _download_winget.ps1
-  ```
-  下载完成后，再用 Write 工具创建安装脚本 `_install_winget.ps1`：
-  ```powershell
-  Add-AppxPackage -Path "$env:TEMP\winget.msixbundle"
-  Remove-Item "$env:TEMP\winget.msixbundle" -ErrorAction SilentlyContinue
-  Write-Host "winget 安装完成"
-  ```
-  执行安装：
-  ```bash
-  # 步骤 2：安装（设置 Bash 超时 120 秒）
-  powershell -ExecutionPolicy Bypass -File "_install_winget.ps1"
-  rm -f _install_winget.ps1
-  ```
-
-  **重要**：`$ProgressPreference = 'SilentlyContinue'` 用于禁用 PowerShell 下载进度条，可显著加快下载速度。
-
-  安装后重新检测 winget，失败则提示用户从 Microsoft Store 搜索"应用安装程序"手动安装。
-
-- 用户拒绝 → **终止技能执行**。
-
-### 0.2 检测 mysql 客户端
-
-按以下顺序检测，找到第一个可用的即停止：
-
-```bash
-mysql --version 2>/dev/null || \
-mysql.exe --version 2>/dev/null || \
-"/mnt/c/Program Files/MySQL/MySQL Server 8.4/bin/mysql.exe" --version 2>/dev/null
-```
-
-将找到的可执行文件路径记为 `$MYSQL`（后续所有数据库操作统一使用此变量替代 `mysql` 命令）。
-
-如果均未找到，使用 AskUserQuestion 询问用户是否同意通过 winget 安装 MySQL 客户端，用户同意后执行：
-
-```bash
-$WINGET install Oracle.MySQL --accept-source-agreements --accept-package-agreements
-```
-
-安装完成后重新检测 mysql 客户端。
-
-### 0.3 检测 Python3
+### 0.1 检测 Python3
 
 按以下顺序检测 Python3 可执行文件，找到第一个可用的即停止：
 
 ```bash
-# Linux 原生
-python3 --version 2>/dev/null || python --version 2>/dev/null || \
-# Windows 侧
-python3.exe --version 2>/dev/null || python.exe --version 2>/dev/null
+python3 --version 2>/dev/null || python --version 2>/dev/null
 ```
 
 将找到的可执行文件名记为 `$PYTHON`（后续步骤统一使用此变量）。
 
-### 0.4 Python3 不存在 → 通过 winget 安装
+### 0.2 Python3 不存在 → 自动安装
 
-如果上述均未找到，告知用户："未检测到 Python3 环境，即将通过 winget 安装（用于 Excel 导出）"，然后执行：
+如果系统上未找到 Python3，根据操作系统自动处理：
 
+**判断操作系统**：
 ```bash
-$WINGET install Python.Python.3.12 --accept-source-agreements --accept-package-agreements
+uname -s 2>/dev/null
 ```
 
-安装完成后重新检测 Python3，失败则提示用户手动安装。
-
-### 0.5 检测 openpyxl 模块
+#### Linux（含 WSL2）
 
 ```bash
-$PYTHON -c "import openpyxl" 2>/dev/null
+# Debian/Ubuntu
+sudo apt update && sudo apt install -y python3 python3-pip
+# CentOS/RHEL
+sudo yum install -y python3 python3-pip
+```
+
+#### Mac
+
+```bash
+# 检测 brew
+brew --version 2>/dev/null
+# brew 可用则安装
+brew install python3
+# brew 不可用则提示用户前往 https://www.python.org/downloads/ 下载
+```
+
+#### Windows（嵌入式 Python 自动安装，无需用户操作）
+
+如果系统上未检测到 Python3，自动下载 **Python 嵌入式版本**（免安装、无需管理员权限）：
+
+**步骤 1：下载嵌入式 Python**（设置 Bash 超时 300 秒）
+
+用 Write 工具创建临时脚本 `_setup_python.ps1`：
+```powershell
+$ProgressPreference = 'SilentlyContinue'
+$pythonDir = "$env:USERPROFILE\.claude\python"
+$zipPath = "$env:TEMP\python-embed.zip"
+
+if (Test-Path "$pythonDir\python.exe") {
+    Write-Host "Python 已存在: $pythonDir\python.exe"
+    exit 0
+}
+
+Write-Host "正在下载 Python 嵌入式版本..."
+New-Item -ItemType Directory -Path $pythonDir -Force | Out-Null
+Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.12.9/python-3.12.9-embed-amd64.zip' -OutFile $zipPath
+Write-Host "正在解压..."
+Expand-Archive -Path $zipPath -DestinationPath $pythonDir -Force
+Remove-Item $zipPath
+
+# 启用 pip：修改 python312._pth，取消 import site 的注释
+$pthFile = Get-ChildItem "$pythonDir\python*._pth" | Select-Object -First 1
+if ($pthFile) {
+    $content = Get-Content $pthFile.FullName
+    $content = $content -replace '^#\s*import site', 'import site'
+    Set-Content $pthFile.FullName $content
+}
+
+# 安装 pip
+Write-Host "正在安装 pip..."
+Invoke-WebRequest -Uri 'https://bootstrap.pypa.io/get-pip.py' -OutFile "$pythonDir\get-pip.py"
+& "$pythonDir\python.exe" "$pythonDir\get-pip.py" --quiet
+Remove-Item "$pythonDir\get-pip.py"
+
+Write-Host "Python 嵌入式版本安装完成: $pythonDir\python.exe"
+```
+
+执行：
+```bash
+powershell -ExecutionPolicy Bypass -File "_setup_python.ps1"
+rm -f _setup_python.ps1
+```
+
+**步骤 2：确认 Python 可用**
+
+安装完成后，使用嵌入式 Python 路径：
+- WSL2 环境：`$PYTHON` 设为类似 `/mnt/c/Users/<用户名>/.claude/python/python.exe`
+- Git Bash / 原生 Windows：`$PYTHON` 设为类似 `$USERPROFILE/.claude/python/python.exe`
+
+验证：
+```bash
+$PYTHON --version
+```
+
+### 0.3 检测并安装 pip 依赖
+
+检测 pymysql 和 openpyxl 模块：
+
+```bash
+$PYTHON -c "import pymysql; import openpyxl" 2>/dev/null
 ```
 
 如果导入失败，自动安装：
 
 ```bash
-$PYTHON -m pip install openpyxl --quiet 2>&1
+$PYTHON -m pip install pymysql openpyxl --quiet 2>&1
 ```
 
-安装后再次检测，仍然失败则提示用户手动执行 `pip install openpyxl`。
+安装后再次检测，仍然失败则提示用户手动执行 `pip install pymysql openpyxl`。
 
-### 0.6 预检通过
+### 0.4 预检通过
 
 所有检测通过后输出：
 
 ```
 环境预检通过 ✓
-  MySQL 客户端: <版本号> (<$MYSQL 路径>)
   Python: <版本号> (<$PYTHON 路径>)
+  pymysql: 已就绪
   openpyxl: 已就绪
+  数据库连接: pymysql（无需 mysql CLI）
   Excel 导出: 可用
 ```
 
@@ -178,14 +153,14 @@ $PYTHON -m pip install openpyxl --quiet 2>&1
 
 如果 `.env` 不存在或缺少必填项（用户名、密码），使用 AskUserQuestion 向用户询问。
 
-记录 `.env` 文件的绝对路径，记为 `$ENV_FILE`（后续传给 `db_query.sh`）。
+记录 `.env` 文件的绝对路径，记为 `$ENV_FILE`（后续传给 `db_query.py`）。
 
 ### 1.2 测试连接
 
 **所有数据库查询统一使用封装脚本**，避免在 Bash 命令中暴露凭据：
 
 ```bash
-bash ~/.claude/skills/link-data-viewer/scripts/db_query.sh "$ENV_FILE" "<database>" "<SQL>" [--raw|--table|--silent]
+$PYTHON ~/.claude/skills/link-data-viewer/scripts/db_query.py "$ENV_FILE" "<database>" "<SQL>" [--raw|--table|--silent]
 ```
 
 参数说明：
@@ -199,7 +174,7 @@ bash ~/.claude/skills/link-data-viewer/scripts/db_query.sh "$ENV_FILE" "<databas
 测试连接：
 
 ```bash
-bash ~/.claude/skills/link-data-viewer/scripts/db_query.sh "$ENV_FILE" "<database>" "SELECT 1" --silent
+$PYTHON ~/.claude/skills/link-data-viewer/scripts/db_query.py "$ENV_FILE" "<database>" "SELECT 1" --silent
 ```
 
 - 连接成功 → 告知用户："数据库连接成功！数据库：<database>"
@@ -319,7 +294,7 @@ SHOW INDEX FROM <table>;
 **在执行任何 SQL 之前**，必须使用安全检查脚本验证：
 
 ```bash
-bash ~/.claude/skills/link-data-viewer/scripts/sql_guard.sh "<sql_statement>"
+$PYTHON ~/.claude/skills/link-data-viewer/scripts/sql_guard.py "<sql_statement>"
 ```
 
 - 返回 0 → SQL 安全，可以执行
@@ -398,19 +373,22 @@ SELECT COUNT(*) AS total FROM (<用户的查询语句去掉ORDER BY和LIMIT>) AS
 
 ```bash
 # 步骤 1：导出原始数据到临时文件
-bash ~/.claude/skills/link-data-viewer/scripts/db_query.sh "$ENV_FILE" "<database>" "<sql_with_limit>" --raw --silent > /tmp/_db_export_tmp.tsv
+$PYTHON ~/.claude/skills/link-data-viewer/scripts/db_query.py "$ENV_FILE" "<database>" "<sql_with_limit>" --raw --silent > /tmp/_db_export_tmp.tsv
 
-# 步骤 2：调用 Python 脚本转为 Excel（使用 Windows 路径格式，兼容 WSL2）
+# 步骤 2：调用 Python 脚本转为 Excel
 $PYTHON ~/.claude/skills/link-data-viewer/scripts/export_excel.py \
-  "$(wslpath -w /tmp/_db_export_tmp.tsv 2>/dev/null || echo /tmp/_db_export_tmp.tsv)" \
-  "$(wslpath -w '<输出目录>/<表名>_<yyyyMMdd_HHmmss>.xlsx' 2>/dev/null || echo '<输出目录>/<表名>_<yyyyMMdd_HHmmss>.xlsx')"
+  "/tmp/_db_export_tmp.tsv" \
+  "<输出目录>/<表名>_<yyyyMMdd_HHmmss>.xlsx"
 
 # 步骤 3：清理临时文件
 rm -f /tmp/_db_export_tmp.tsv
 ```
 
 其中 `$PYTHON` 是阶段 0 检测到的 Python 可执行文件路径。`<输出目录>` 为当前工作目录。
-如果 `$PYTHON` 是 Windows 侧的（如 `python.exe`），文件路径需通过 `wslpath -w` 转为 Windows 格式。
+
+**注意**：如果 `$PYTHON` 是 Windows 侧的（如嵌入式 `python.exe`），文件路径可能需要调整：
+- WSL2 环境下通过 `wslpath -w` 转为 Windows 格式
+- Git Bash 环境下路径通常无需转换
 
 - 导出完成后告知用户文件路径和文件大小
 - 如果结果集很大（> 5000 行），提前提示用户导出可能需要一些时间
@@ -427,14 +405,14 @@ rm -f /tmp/_db_export_tmp.tsv
 ## 全局规则
 
 ### 错误处理
-- 所有 mysql 命令添加 `--connect-timeout=5` 防止连接挂起
-- 查询添加超时：在 SQL 前加 `SET SESSION MAX_EXECUTION_TIME=600000;`（MySQL 5.7.8+），或使用 `timeout 600` 包裹命令
+- 数据库连接超时设为 5 秒（pymysql connect_timeout 参数）
+- 查询读取超时设为 600 秒（pymysql read_timeout 参数）
 - 如果查询报错，展示错误信息并帮助用户理解原因和修正方案
 
 ### 密码安全
 - 不要在输出中明文展示数据库密码
 - 展示连接信息时将密码显示为 `****`
-- **禁止在 Bash 命令中直接拼接数据库凭据**（主机、用户名、密码），所有查询必须通过 `db_query.sh` 封装脚本执行，由脚本内部读取 `.env` 完成连接
+- **禁止在 Bash 命令中直接拼接数据库凭据**（主机、用户名、密码），所有查询必须通过 `db_query.py` 封装脚本执行，由脚本内部读取 `.env` 完成连接
 
 ### 性能保护
 - 单次查询结果不超过 10000 行
@@ -449,20 +427,20 @@ rm -f /tmp/_db_export_tmp.tsv
 
 ### 数据库查询统一入口
 
-**所有数据库查询必须通过封装脚本执行**，禁止直接调用 mysql/mysql.exe 拼接凭据：
+**所有数据库查询必须通过封装脚本执行**，禁止直接拼接凭据：
 
 ```bash
 # 标准查询（自动输出格式）
-bash ~/.claude/skills/link-data-viewer/scripts/db_query.sh "$ENV_FILE" "<database>" "<SQL>" --silent
+$PYTHON ~/.claude/skills/link-data-viewer/scripts/db_query.py "$ENV_FILE" "<database>" "<SQL>" --silent
 
 # 美化表格输出
-bash ~/.claude/skills/link-data-viewer/scripts/db_query.sh "$ENV_FILE" "<database>" "<SQL>" --table --silent
+$PYTHON ~/.claude/skills/link-data-viewer/scripts/db_query.py "$ENV_FILE" "<database>" "<SQL>" --table --silent
 
 # 原始 TSV 输出（用于导出到文件）
-bash ~/.claude/skills/link-data-viewer/scripts/db_query.sh "$ENV_FILE" "<database>" "<SQL>" --raw --silent
+$PYTHON ~/.claude/skills/link-data-viewer/scripts/db_query.py "$ENV_FILE" "<database>" "<SQL>" --raw --silent
 
 # 不指定数据库（如 SHOW DATABASES）
-bash ~/.claude/skills/link-data-viewer/scripts/db_query.sh "$ENV_FILE" "" "SHOW DATABASES" --silent
+$PYTHON ~/.claude/skills/link-data-viewer/scripts/db_query.py "$ENV_FILE" "" "SHOW DATABASES" --silent
 ```
 
 这样 Bash 工具调用中只会显示 `.env 路径`、`库名`、`SQL 语句`，凭据完全隐藏在脚本内部。
