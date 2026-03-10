@@ -54,11 +54,22 @@ winget --version 2>/dev/null
   - 用户拒绝 → **终止技能执行**。
 
 - **原生 Windows 环境** → 使用 AskUserQuestion 询问用户是否同意自动安装 winget：
-  - 用户同意 → 执行：
-    ```bash
-    powershell -Command "Invoke-WebRequest -Uri 'https://aka.ms/getwinget' -OutFile \"$env:TEMP\\winget.msixbundle\"; Add-AppxPackage -Path \"$env:TEMP\\winget.msixbundle\"; Remove-Item \"$env:TEMP\\winget.msixbundle\""
+  - 用户同意 → 先用 Write 工具在当前目录创建临时脚本 `_install_winget.ps1`：
+    ```powershell
+    $tempPath = "$env:TEMP\winget.msixbundle"
+    Invoke-WebRequest -Uri 'https://aka.ms/getwinget' -OutFile $tempPath
+    Add-AppxPackage -Path $tempPath
+    Remove-Item $tempPath
     ```
-    安装后验证 `winget --version`，失败则提示用户从 Microsoft Store 搜索"应用安装程序"手动安装。
+    然后执行：
+    ```bash
+    powershell -ExecutionPolicy Bypass -File "_install_winget.ps1"
+    ```
+    安装完成后删除临时脚本：
+    ```bash
+    rm -f _install_winget.ps1
+    ```
+    验证 `winget --version`，失败则提示用户从 Microsoft Store 搜索"应用安装程序"手动安装。
   - 用户拒绝 → **终止技能执行**。
 
 将检测到的 winget 命令记为 `$WINGET`（WSL2 下为 `winget.exe`，原生 Windows 下为 `winget`）。
