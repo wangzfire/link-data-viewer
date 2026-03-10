@@ -26,53 +26,55 @@ grep -qi microsoft /proc/version 2>/dev/null
 ```
 
 - 返回 0 → **WSL2 环境**（后续可使用 `.exe` 后缀调用 Windows 侧工具，路径可通过 `wslpath -w` 转换）
-- 返回非 0 → **原生环境**（Linux 或 Windows 原生）
+- 返回非 0 → 进一步判断：
+  ```bash
+  uname -s 2>/dev/null
+  ```
+  - 输出含 `MINGW` 或 `MSYS` → **Git Bash 环境**（Windows 上的 bash，可直接调用 Windows 可执行文件）
+  - 输出为 `Linux` → **原生 Linux 环境**
+
+**本技能要求 Windows 用户使用 Git Bash 运行。** 如果检测到非 bash 环境（如 CMD、PowerShell），提示用户：
+> 本技能需要在 Git Bash 环境下运行。请安装 Git for Windows（https://git-scm.com/download/win）后在 Git Bash 中使用 Claude Code。
 
 将环境类型记录下来，后续安装和调用命令时据此选择正确的方式。
 
 ### 0.1 检测 winget
 
-winget 是本技能安装依赖的**唯一包管理器**，必须先确保可用：
+winget 是本技能在 Windows 上安装依赖的**唯一包管理器**，必须先确保可用：
 
 ```bash
-# WSL2 环境
-winget.exe --version 2>/dev/null
-# 原生 Windows 环境
-winget --version 2>/dev/null
+winget --version 2>/dev/null || winget.exe --version 2>/dev/null
 ```
 
-如果 winget 不可用：
+将检测到的可执行文件记为 `$WINGET`。
 
-- **WSL2 环境** → 使用 AskUserQuestion 询问用户是否同意自动安装 winget：
-  - 用户同意 → 执行：
-    ```bash
-    curl -sL "https://aka.ms/getwinget" -o /tmp/winget.msixbundle
-    powershell.exe -Command "Add-AppxPackage -Path '$(wslpath -w /tmp/winget.msixbundle)'" 2>&1
-    rm -f /tmp/winget.msixbundle
-    ```
-    安装后验证 `winget.exe --version`，失败则提示用户从 Microsoft Store 搜索"应用安装程序"手动安装。
-  - 用户拒绝 → **终止技能执行**。
+如果 winget 不可用，使用 AskUserQuestion 询问用户是否同意自动安装 winget：
 
-- **原生 Windows 环境** → 使用 AskUserQuestion 询问用户是否同意自动安装 winget：
-  - 用户同意 → 先用 Write 工具在当前目录创建临时脚本 `_install_winget.ps1`：
-    ```powershell
-    $tempPath = "$env:TEMP\winget.msixbundle"
-    Invoke-WebRequest -Uri 'https://aka.ms/getwinget' -OutFile $tempPath
-    Add-AppxPackage -Path $tempPath
-    Remove-Item $tempPath
-    ```
-    然后执行：
-    ```bash
-    powershell -ExecutionPolicy Bypass -File "_install_winget.ps1"
-    ```
-    安装完成后删除临时脚本：
-    ```bash
-    rm -f _install_winget.ps1
-    ```
-    验证 `winget --version`，失败则提示用户从 Microsoft Store 搜索"应用安装程序"手动安装。
-  - 用户拒绝 → **终止技能执行**。
+- 用户同意 → 根据环境执行安装：
 
-将检测到的 winget 命令记为 `$WINGET`（WSL2 下为 `winget.exe`，原生 Windows 下为 `winget`）。
+  **WSL2 环境**：
+  ```bash
+  curl -sL "https://aka.ms/getwinget" -o /tmp/winget.msixbundle
+  powershell.exe -Command "Add-AppxPackage -Path '$(wslpath -w /tmp/winget.msixbundle)'" 2>&1
+  rm -f /tmp/winget.msixbundle
+  ```
+
+  **Git Bash 环境**：先用 Write 工具在当前目录创建临时脚本 `_install_winget.ps1`：
+  ```powershell
+  $tempPath = "$env:TEMP\winget.msixbundle"
+  Invoke-WebRequest -Uri 'https://aka.ms/getwinget' -OutFile $tempPath
+  Add-AppxPackage -Path $tempPath
+  Remove-Item $tempPath
+  ```
+  然后执行：
+  ```bash
+  powershell -ExecutionPolicy Bypass -File "_install_winget.ps1"
+  rm -f _install_winget.ps1
+  ```
+
+  安装后重新检测 winget，失败则提示用户从 Microsoft Store 搜索"应用安装程序"手动安装。
+
+- 用户拒绝 → **终止技能执行**。
 
 ### 0.2 检测 mysql 客户端
 
