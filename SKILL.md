@@ -50,27 +50,50 @@ winget --version 2>/dev/null || winget.exe --version 2>/dev/null
 
 如果 winget 不可用，使用 AskUserQuestion 询问用户是否同意自动安装 winget：
 
-- 用户同意 → 根据环境执行安装：
+- 用户同意 → 根据环境分步执行安装（**注意：下载和安装分开执行，每步设置足够的超时时间**）：
 
   **WSL2 环境**：
   ```bash
-  curl -sL "https://aka.ms/getwinget" -o /tmp/winget.msixbundle
+  # 步骤 1：下载（设置 Bash 超时 300 秒）
+  curl -L "https://aka.ms/getwinget" -o /tmp/winget.msixbundle
+  ```
+  下载完成后确认文件存在，再执行安装：
+  ```bash
+  # 步骤 2：安装（设置 Bash 超时 120 秒）
   powershell.exe -Command "Add-AppxPackage -Path '$(wslpath -w /tmp/winget.msixbundle)'" 2>&1
   rm -f /tmp/winget.msixbundle
   ```
 
-  **Git Bash 环境**：先用 Write 工具在当前目录创建临时脚本 `_install_winget.ps1`：
-  ```powershell
-  $tempPath = "$env:TEMP\winget.msixbundle"
-  Invoke-WebRequest -Uri 'https://aka.ms/getwinget' -OutFile $tempPath
-  Add-AppxPackage -Path $tempPath
-  Remove-Item $tempPath
-  ```
-  然后执行：
+  **Git Bash 环境**：
   ```bash
+  # 步骤 1：下载（设置 Bash 超时 300 秒）
+  # 使用 PowerShell 下载，通过临时脚本避免转义问题
+  ```
+  先用 Write 工具创建临时脚本 `_download_winget.ps1`：
+  ```powershell
+  $ProgressPreference = 'SilentlyContinue'
+  Invoke-WebRequest -Uri 'https://aka.ms/getwinget' -OutFile "$env:TEMP\winget.msixbundle"
+  Write-Host "下载完成: $env:TEMP\winget.msixbundle"
+  ```
+  执行下载：
+  ```bash
+  powershell -ExecutionPolicy Bypass -File "_download_winget.ps1"
+  rm -f _download_winget.ps1
+  ```
+  下载完成后，再用 Write 工具创建安装脚本 `_install_winget.ps1`：
+  ```powershell
+  Add-AppxPackage -Path "$env:TEMP\winget.msixbundle"
+  Remove-Item "$env:TEMP\winget.msixbundle" -ErrorAction SilentlyContinue
+  Write-Host "winget 安装完成"
+  ```
+  执行安装：
+  ```bash
+  # 步骤 2：安装（设置 Bash 超时 120 秒）
   powershell -ExecutionPolicy Bypass -File "_install_winget.ps1"
   rm -f _install_winget.ps1
   ```
+
+  **重要**：`$ProgressPreference = 'SilentlyContinue'` 用于禁用 PowerShell 下载进度条，可显著加快下载速度。
 
   安装后重新检测 winget，失败则提示用户从 Microsoft Store 搜索"应用安装程序"手动安装。
 
