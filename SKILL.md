@@ -53,14 +53,13 @@ winget --version 2>/dev/null
     安装后验证 `winget.exe --version`，失败则提示用户从 Microsoft Store 搜索"应用安装程序"手动安装。
   - 用户拒绝 → **终止技能执行**。
 
-- **原生 Windows 环境** → 提示用户：
-  > 未检测到 winget。请通过以下方式安装：
-  > 1. 打开 Microsoft Store，搜索"应用安装程序"并安装
-  > 2. 或访问 https://github.com/microsoft/winget-cli/releases 下载最新版安装
-  >
-  > 安装完成后请重新执行此技能。
-
-  **终止技能执行**。
+- **原生 Windows 环境** → 使用 AskUserQuestion 询问用户是否同意自动安装 winget：
+  - 用户同意 → 执行：
+    ```bash
+    powershell -Command "Invoke-WebRequest -Uri 'https://aka.ms/getwinget' -OutFile \"$env:TEMP\\winget.msixbundle\"; Add-AppxPackage -Path \"$env:TEMP\\winget.msixbundle\"; Remove-Item \"$env:TEMP\\winget.msixbundle\""
+    ```
+    安装后验证 `winget --version`，失败则提示用户从 Microsoft Store 搜索"应用安装程序"手动安装。
+  - 用户拒绝 → **终止技能执行**。
 
 将检测到的 winget 命令记为 `$WINGET`（WSL2 下为 `winget.exe`，原生 Windows 下为 `winget`）。
 
