@@ -16,7 +16,55 @@ disable-model-invocation: false
 
 在执行任何数据库操作之前，必须先完成环境检测。此阶段确保 mysql 客户端和 Excel 导出所需的依赖可用。
 
-### 0.1 检测 mysql 客户端
+### 0.0 环境识别
+
+首先判断当前运行环境：
+
+```bash
+# 检测是否为 WSL2 环境
+grep -qi microsoft /proc/version 2>/dev/null
+```
+
+- 返回 0 → **WSL2 环境**（后续可使用 `.exe` 后缀调用 Windows 侧工具，路径可通过 `wslpath -w` 转换）
+- 返回非 0 → **原生环境**（Linux 或 Windows 原生）
+
+将环境类型记录下来，后续安装和调用命令时据此选择正确的方式。
+
+### 0.1 检测 winget
+
+winget 是本技能安装依赖的**唯一包管理器**，必须先确保可用：
+
+```bash
+# WSL2 环境
+winget.exe --version 2>/dev/null
+# 原生 Windows 环境
+winget --version 2>/dev/null
+```
+
+如果 winget 不可用：
+
+- **WSL2 环境** → 使用 AskUserQuestion 询问用户是否同意自动安装 winget：
+  - 用户同意 → 执行：
+    ```bash
+    curl -sL "https://aka.ms/getwinget" -o /tmp/winget.msixbundle
+    powershell.exe -Command "Add-AppxPackage -Path '$(wslpath -w /tmp/winget.msixbundle)'" 2>&1
+    rm -f /tmp/winget.msixbundle
+    ```
+    安装后验证 `winget.exe --version`，失败则提示用户从 Microsoft Store 搜索"应用安装程序"手动安装。
+  - 用户拒绝 → **终止技能执行**。
+
+- **原生 Windows 环境** → 提示用户：
+  > 未检测到 winget。请通过以下方式安装：
+  > 1. 打开 Microsoft Store，搜索"应用安装程序"并安装
+  > 2. 或访问 https://github.com/microsoft/winget-cli/releases 下载最新版安装
+  >
+  > 安装完成后请重新执行此技能。
+
+  **终止技能执行**。
+
+将检测到的 winget 命令记为 `$WINGET`（WSL2 下为 `winget.exe`，原生 Windows 下为 `winget`）。
+
+### 0.2 检测 mysql 客户端
 
 按以下顺序检测，找到第一个可用的即停止：
 
@@ -28,64 +76,38 @@ mysql.exe --version 2>/dev/null || \
 
 将找到的可执行文件路径记为 `$MYSQL`（后续所有数据库操作统一使用此变量替代 `mysql` 命令）。
 
-如果均未找到，通过 winget 安装：
+如果均未找到，使用 AskUserQuestion 询问用户是否同意通过 winget 安装 MySQL 客户端，用户同意后执行：
 
-1. 检测 winget：
-   ```bash
-   winget.exe --version 2>/dev/null
-   ```
-2. **winget 可用** → 使用 AskUserQuestion 询问用户是否同意安装 MySQL 客户端，用户同意后执行：
-   ```bash
-   winget.exe install Oracle.MySQL --accept-source-agreements --accept-package-agreements
-   ```
-   安装完成后重新检测 mysql.exe。
+```bash
+$WINGET install Oracle.MySQL --accept-source-agreements --accept-package-agreements
+```
 
-3. **winget 也不可用** → 使用 AskUserQuestion 询问用户是否同意自动安装 winget，同意则先安装 winget（流程同 0.3），再回到此步骤安装 MySQL。用户拒绝则**终止技能执行**。
+安装完成后重新检测 mysql 客户端。
 
-### 0.2 检测 Python3
+### 0.3 检测 Python3
 
 按以下顺序检测 Python3 可执行文件，找到第一个可用的即停止：
 
 ```bash
-# 优先检测 Linux 原生
+# Linux 原生
 python3 --version 2>/dev/null || python --version 2>/dev/null || \
-# WSL2 环境下检测 Windows 侧
+# Windows 侧
 python3.exe --version 2>/dev/null || python.exe --version 2>/dev/null
 ```
 
 将找到的可执行文件名记为 `$PYTHON`（后续步骤统一使用此变量）。
 
-### 0.3 Python3 不存在 → 通过 winget 安装
+### 0.4 Python3 不存在 → 通过 winget 安装
 
-如果上述均未找到，检测 winget：
+如果上述均未找到，告知用户："未检测到 Python3 环境，即将通过 winget 安装（用于 Excel 导出）"，然后执行：
 
 ```bash
-winget.exe --version 2>/dev/null
+$WINGET install Python.Python.3.12 --accept-source-agreements --accept-package-agreements
 ```
 
-- **winget 可用** → 告知用户："未检测到 Python3 环境，即将通过 winget 安装（用于 Excel 导出）"，然后执行：
-  ```bash
-  winget.exe install Python.Python.3.12 --accept-source-agreements --accept-package-agreements
-  ```
-  安装完成后重新检测 `python3.exe --version`，成功则继续，失败则提示用户手动安装。
+安装完成后重新检测 Python3，失败则提示用户手动安装。
 
-- **winget 也不可用** → 使用 AskUserQuestion 询问用户是否同意自动安装 winget：
-  > 未检测到 Python3 和 winget。需要安装 winget 后再通过 winget 安装 Python3（用于 Excel 导出）。
-  > 是否允许自动安装 winget？
-
-  - 用户同意 → 执行以下命令安装 winget：
-    ```bash
-    # 下载最新 winget msixbundle
-    curl -sL "https://aka.ms/getwinget" -o /tmp/winget.msixbundle
-    powershell.exe -Command "Add-AppxPackage -Path '$(wslpath -w /tmp/winget.msixbundle)'" 2>&1
-    rm -f /tmp/winget.msixbundle
-    ```
-    安装完成后验证 `winget.exe --version`，成功则回到 0.2 继续安装 Python3。
-    若 winget 安装失败，提示用户从 Microsoft Store 搜索"应用安装程序"手动安装，然后重新执行此技能。
-
-  - 用户拒绝 → 提示用户可手动安装 Python3 后重新执行，**终止技能执行**。
-
-### 0.4 检测 openpyxl 模块
+### 0.5 检测 openpyxl 模块
 
 ```bash
 $PYTHON -c "import openpyxl" 2>/dev/null
@@ -99,7 +121,7 @@ $PYTHON -m pip install openpyxl --quiet 2>&1
 
 安装后再次检测，仍然失败则提示用户手动执行 `pip install openpyxl`。
 
-### 0.5 预检通过
+### 0.6 预检通过
 
 所有检测通过后输出：
 
