@@ -333,7 +333,7 @@ SELECT COUNT(*) AS total FROM (<用户的查询语句去掉ORDER BY和LIMIT>) AS
 - 执行带 LIMIT 的查询
 - 以 markdown 表格展示
 - 每次最多显示 50 行，如果超过则分批展示，每批后询问是否继续
-- 添加超时限制 30 秒
+- 添加超时限制 600 秒
 
 **导出 Excel**：
 
@@ -371,7 +371,7 @@ rm -f /tmp/_db_export_tmp.tsv
 
 ### 错误处理
 - 所有 mysql 命令添加 `--connect-timeout=5` 防止连接挂起
-- 查询添加超时：在 SQL 前加 `SET SESSION MAX_EXECUTION_TIME=30000;`（MySQL 5.7.8+），或使用 `timeout 30` 包裹命令
+- 查询添加超时：在 SQL 前加 `SET SESSION MAX_EXECUTION_TIME=600000;`（MySQL 5.7.8+），或使用 `timeout 600` 包裹命令
 - 如果查询报错，展示错误信息并帮助用户理解原因和修正方案
 
 ### 密码安全
@@ -382,7 +382,7 @@ rm -f /tmp/_db_export_tmp.tsv
 ### 性能保护
 - 单次查询结果不超过 10000 行
 - 没有 WHERE 条件的全表查询，如果预估行数 > 10000，必须添加 LIMIT
-- JOIN 查询最多关联 3 张表
+- JOIN 查询不限制关联表数量，但建议关联前先确认各表的关联字段和索引情况
 - 禁止使用 `SELECT *`（除非表字段少于 10 个），应明确列出需要的字段
 - 子查询嵌套不超过 2 层
 
